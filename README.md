@@ -44,7 +44,17 @@ image_classification_sota
 │   │   ├── cifar-10-batches-py
 │   │   ├── cifar-100-python
 ```
+### update path 
+import sys
+sys.path.append("/content/Image_classification_Matry_NC")
 
+import os
+os.environ['PYTHONPATH'] = '/content/Image_classification_Matry_NC' #colab path
+os.environ['LOCAL_RANK'] = '-1'
+os.environ['MASTER_ADDR'] = '127.0.0.1'
+os.environ['MASTER_PORT'] = '12355'
+os.environ['RANK'] = '0'
+os.environ['WORLD_SIZE'] = '1'
 ### Training configurations  
 * `Strategies`: The training strategies are configured using yaml file or arguments. Examples are in `configs/strategies` directory.
 
