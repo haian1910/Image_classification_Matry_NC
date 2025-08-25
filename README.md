@@ -45,7 +45,7 @@ image_classification_sota
 │   │   ├── cifar-100-python
 ```
 ### update path 
-...
+<pre> ```
 import sys
 sys.path.append("/content/Image_classification_Matry_NC")
 
@@ -56,7 +56,7 @@ os.environ['MASTER_ADDR'] = '127.0.0.1'
 os.environ['MASTER_PORT'] = '12355'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
-...
+``` </pre>
 ### Training configurations  
 * `Strategies`: The training strategies are configured using yaml file or arguments. Examples are in `configs/strategies` directory.
 
