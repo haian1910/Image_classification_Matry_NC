@@ -365,24 +365,17 @@ def train_epoch(args,
         if batch_idx % args.log_interval == 0 or batch_idx == len(loader) - 1:
             is_matryoshka = args.model.startswith('matryoshka_')
             
-            if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
-                # Log individual dimension losses
-                dim_losses = ' '.join([f'{k}: {v:.3f}' for k, v in loss_fn.loss_dict.items()])
-                base_log_msg = ('Train: {} [{:>4d}/{}] '
-                               'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
-                               'LR: {lr:.3e} '
-                               'Dims: {dims} ')
-            else:
-                dim_losses = ''
-                base_log_msg = ('Train: {} [{:>4d}/{}] '
-                               'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
-                               'LR: {lr:.3e} ')
-            
             if _has_nvidia_smi:
                 util = int(nvidia_smi.nvmlDeviceGetUtilizationRates(handle).gpu)
                 mem = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).used / 1024 / 1024
+                
                 if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
-                    logger.info(base_log_msg +
+                    # Log individual dimension losses
+                    dim_losses = ' '.join([f'{k}: {v:.3f}' for k, v in loss_fn.loss_dict.items()])
+                    logger.info('Train: {} [{:>4d}/{}] '
+                                'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                                'LR: {lr:.3e} '
+                                'Dims: [{dims}] '
                                 'Mem: {memory:.0f} '
                                 'Util: {util:d}% '
                                 'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
@@ -398,7 +391,9 @@ def train_epoch(args,
                                     batch_time=batch_time_m,
                                     data_time=data_time_m))
                 else:
-                    logger.info(base_log_msg +
+                    logger.info('Train: {} [{:>4d}/{}] '
+                                'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                                'LR: {lr:.3e} '
                                 'Mem: {memory:.0f} '
                                 'Util: {util:d}% '
                                 'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
@@ -414,7 +409,12 @@ def train_epoch(args,
                                     data_time=data_time_m))
             else:
                 if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
-                    logger.info(base_log_msg +
+                    # Log individual dimension losses
+                    dim_losses = ' '.join([f'{k}: {v:.3f}' for k, v in loss_fn.loss_dict.items()])
+                    logger.info('Train: {} [{:>4d}/{}] '
+                                'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                                'LR: {lr:.3e} '
+                                'Dims: [{dims}] '
                                 'Mem: {memory:.0f} '
                                 'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
                                 'Data: {data_time.val:.2f}s'.format(
@@ -428,7 +428,9 @@ def train_epoch(args,
                                     batch_time=batch_time_m,
                                     data_time=data_time_m))
                 else:
-                    logger.info(base_log_msg +
+                    logger.info('Train: {} [{:>4d}/{}] '
+                                'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                                'LR: {lr:.3e} '
                                 'Mem: {memory:.0f} '
                                 'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
                                 'Data: {data_time.val:.2f}s'.format(
