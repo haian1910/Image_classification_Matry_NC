@@ -179,6 +179,16 @@ parser.add_argument('--dyrep-recal-bn-iters', type=int, default=20,
 parser.add_argument('--dyrep-recal-bn-every-epoch', action='store_true', default=False,
                     help='Recal BN after every epoch in DyRep')
 
+# Matryoshka Models
+parser.add_argument('--matryoshka-dims', type=int, nargs='+', default=[64, 128, 256, 512],
+                    help='List of nested representation dimensions for Matryoshka models')
+parser.add_argument('--matryoshka-adaptive', action='store_true', default=True,
+                    help='Use adaptive training for Matryoshka models')
+parser.add_argument('--matryoshka-warmup', type=int, default=10,
+                    help='Number of warmup epochs for Matryoshka training')
+parser.add_argument('--matryoshka-loss-weights', type=float, nargs='+', default=None,
+                    help='Loss weights for each Matryoshka dimension')
+
 # EdgeNN
 parser.add_argument('--edgenn-config', type=str, default='',
                     help='path to edgenn config')

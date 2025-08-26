@@ -66,13 +66,40 @@ def main():
         build_dataloader(args)
 
     '''build model'''
+    # Check if this is a Matryoshka model
+    is_matryoshka = args.model.startswith('matryoshka_')
+    
     if args.mixup > 0. or args.cutmix > 0 or args.cutmix_minmax is not None:
-        loss_fn = SoftTargetCrossEntropy()
+        base_loss_fn = SoftTargetCrossEntropy()
     elif args.smoothing == 0.:
-        loss_fn = nn.CrossEntropyLoss().cuda()
+        base_loss_fn = nn.CrossEntropyLoss().cuda()
     else:
-        loss_fn = CrossEntropyLabelSmooth(num_classes=args.num_classes,
-                                          epsilon=args.smoothing).cuda()
+        base_loss_fn = CrossEntropyLabelSmooth(num_classes=args.num_classes,
+                                              epsilon=args.smoothing).cuda()
+    
+    # Initialize Matryoshka trainer if needed
+    matryoshka_trainer = None
+    if is_matryoshka:
+        from lib.utils.matryoshka_utils import MatryoshkaTrainer
+        from lib.models.losses import MatryoshkaLoss
+        
+        # Use Matryoshka loss
+        loss_fn = MatryoshkaLoss(
+            matryoshka_dims=args.matryoshka_dims,
+            loss_weights=args.matryoshka_loss_weights,
+            base_loss_fn=base_loss_fn,
+            label_smoothing=args.smoothing
+        ).cuda()
+        
+        # Initialize Matryoshka trainer
+        matryoshka_trainer = MatryoshkaTrainer(
+            matryoshka_dims=args.matryoshka_dims,
+            adaptive_training=args.matryoshka_adaptive,
+            warmup_epochs=args.matryoshka_warmup
+        )
+    else:
+        loss_fn = base_loss_fn
+    
     val_loss_fn = loss_fn
 
     model = build_model(args, args.model)
@@ -219,17 +246,18 @@ def main():
         # train
         metrics = train_epoch(args, epoch, model, model_ema, train_loader,
                               optimizer, loss_fn, scheduler, auxiliary_buffer,
-                              dyrep, loss_scaler)
+                              dyrep, loss_scaler, matryoshka_trainer)
 
         # validate
-        test_metrics = validate(args, epoch, model, val_loader, val_loss_fn)
+        test_metrics = validate(args, epoch, model, val_loader, val_loss_fn, matryoshka_trainer=matryoshka_trainer)
         if model_ema is not None:
             test_metrics = validate(args,
                                     epoch,
                                     model_ema.module,
                                     val_loader,
                                     val_loss_fn,
-                                    log_suffix='(EMA)')
+                                    log_suffix='(EMA)',
+                                    matryoshka_trainer=matryoshka_trainer)
 
         # dyrep
         if dyrep is not None:
@@ -268,7 +296,8 @@ def train_epoch(args,
                 scheduler,
                 auxiliary_buffer=None,
                 dyrep=None,
-                loss_scaler=None):
+                loss_scaler=None,
+                matryoshka_trainer=None):
     loss_m = AverageMeter(dist=True)
     data_time_m = AverageMeter(dist=True)
     batch_time_m = AverageMeter(dist=True)
@@ -285,9 +314,20 @@ def train_epoch(args,
             p.grad = None
 
         with torch.cuda.amp.autocast(enabled=loss_scaler is not None):
+            is_matryoshka = args.model.startswith('matryoshka_')
+            
             if not args.kd:
-                output = model(input)
-                loss = loss_fn(output, target)
+                if is_matryoshka:
+                    # Get training dimensions for this epoch
+                    training_dims = matryoshka_trainer.get_training_dims(epoch)
+                    outputs = model(input, dims=training_dims)
+                    loss = loss_fn(outputs, target)
+                    # Use largest dimension for metrics
+                    largest_dim = max(outputs.keys())
+                    output = outputs[largest_dim]
+                else:
+                    output = model(input)
+                    loss = loss_fn(output, target)
             else:
                 loss = loss_fn(input, target)
     
@@ -323,58 +363,122 @@ def train_epoch(args,
         batch_time = time.time() - start_time
         batch_time_m.update(batch_time)
         if batch_idx % args.log_interval == 0 or batch_idx == len(loader) - 1:
+            is_matryoshka = args.model.startswith('matryoshka_')
+            
+            if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
+                # Log individual dimension losses
+                dim_losses = ' '.join([f'{k}: {v:.3f}' for k, v in loss_fn.loss_dict.items()])
+                base_log_msg = ('Train: {} [{:>4d}/{}] '
+                               'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                               'LR: {lr:.3e} '
+                               'Dims: {dims} ')
+            else:
+                dim_losses = ''
+                base_log_msg = ('Train: {} [{:>4d}/{}] '
+                               'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
+                               'LR: {lr:.3e} ')
+            
             if _has_nvidia_smi:
                 util = int(nvidia_smi.nvmlDeviceGetUtilizationRates(handle).gpu)
                 mem = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).used / 1024 / 1024
-                logger.info('Train: {} [{:>4d}/{}] '
-                            'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
-                            'LR: {lr:.3e} '
-                            'Mem: {memory:.0f} '
-                            'Util: {util:d}% '
-                            'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
-                            'Data: {data_time.val:.2f}s'.format(
-                                epoch,
-                                batch_idx,
-                                len(loader),
-                                loss=loss_m,
-                                lr=optimizer.param_groups[0]['lr'],
-                                util=util,
-                                memory=mem,
-                                batch_time=batch_time_m,
-                                data_time=data_time_m))
+                if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
+                    logger.info(base_log_msg +
+                                'Mem: {memory:.0f} '
+                                'Util: {util:d}% '
+                                'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
+                                'Data: {data_time.val:.2f}s'.format(
+                                    epoch,
+                                    batch_idx,
+                                    len(loader),
+                                    loss=loss_m,
+                                    lr=optimizer.param_groups[0]['lr'],
+                                    dims=dim_losses,
+                                    util=util,
+                                    memory=mem,
+                                    batch_time=batch_time_m,
+                                    data_time=data_time_m))
+                else:
+                    logger.info(base_log_msg +
+                                'Mem: {memory:.0f} '
+                                'Util: {util:d}% '
+                                'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
+                                'Data: {data_time.val:.2f}s'.format(
+                                    epoch,
+                                    batch_idx,
+                                    len(loader),
+                                    loss=loss_m,
+                                    lr=optimizer.param_groups[0]['lr'],
+                                    util=util,
+                                    memory=mem,
+                                    batch_time=batch_time_m,
+                                    data_time=data_time_m))
             else:
-                logger.info('Train: {} [{:>4d}/{}] '
-                            'Loss: {loss.val:.3f} ({loss.avg:.3f}) '
-                            'LR: {lr:.3e} '
-                            'Mem: {memory:.0f} '
-                            'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
-                            'Data: {data_time.val:.2f}s'.format(
-                                epoch,
-                                batch_idx,
-                                len(loader),
-                                loss=loss_m,
-                                lr=optimizer.param_groups[0]['lr'],
-                                memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
-                                batch_time=batch_time_m,
-                                data_time=data_time_m))
+                if is_matryoshka and hasattr(loss_fn, 'loss_dict'):
+                    logger.info(base_log_msg +
+                                'Mem: {memory:.0f} '
+                                'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
+                                'Data: {data_time.val:.2f}s'.format(
+                                    epoch,
+                                    batch_idx,
+                                    len(loader),
+                                    loss=loss_m,
+                                    lr=optimizer.param_groups[0]['lr'],
+                                    dims=dim_losses,
+                                    memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
+                                    batch_time=batch_time_m,
+                                    data_time=data_time_m))
+                else:
+                    logger.info(base_log_msg +
+                                'Mem: {memory:.0f} '
+                                'Time: {batch_time.val:.2f}s ({batch_time.avg:.2f}s) '
+                                'Data: {data_time.val:.2f}s'.format(
+                                    epoch,
+                                    batch_idx,
+                                    len(loader),
+                                    loss=loss_m,
+                                    lr=optimizer.param_groups[0]['lr'],
+                                    memory=torch.cuda.max_memory_allocated() / 1024.0 / 1024.0,
+                                    batch_time=batch_time_m,
+                                    data_time=data_time_m))
         scheduler.step(epoch * len(loader) + batch_idx + 1)
         start_time = time.time()
 
     return {'train_loss': loss_m.avg}
 
 
-def validate(args, epoch, model, loader, loss_fn, log_suffix=''):
+def validate(args, epoch, model, loader, loss_fn, log_suffix='', matryoshka_trainer=None):
     loss_m = AverageMeter(dist=True)
     top1_m = AverageMeter(dist=True)
     top5_m = AverageMeter(dist=True)
     batch_time_m = AverageMeter(dist=True)
     start_time = time.time()
+    
+    is_matryoshka = args.model.startswith('matryoshka_')
+    all_accuracies = {}
 
     model.eval()
     for batch_idx, (input, target) in enumerate(loader):
         with torch.no_grad():
-            output = model(input)
-            loss = loss_fn(output, target)
+            if is_matryoshka:
+                # Evaluate all dimensions during validation
+                outputs = model(input)
+                loss = loss_fn(outputs, target)
+                
+                # Compute accuracies for all dimensions
+                if matryoshka_trainer:
+                    from lib.utils.matryoshka_utils import accuracy as matryoshka_accuracy
+                    batch_accs = matryoshka_trainer.compute_accuracy(outputs, target)
+                    for key, val in batch_accs.items():
+                        if key not in all_accuracies:
+                            all_accuracies[key] = AverageMeter(dist=True)
+                        all_accuracies[key].update(val, n=input.size(0))
+                
+                # Use largest dimension for main metrics
+                largest_dim = max(outputs.keys())
+                output = outputs[largest_dim]
+            else:
+                output = model(input)
+                loss = loss_fn(output, target)
 
         top1, top5 = accuracy(output, target, topk=(1, 5))
         loss_m.update(loss.item(), n=input.size(0))
@@ -399,7 +503,14 @@ def validate(args, epoch, model, loader, loss_fn, log_suffix=''):
                             batch_time=batch_time_m))
         start_time = time.time()
 
-    return {'test_loss': loss_m.avg, 'top1': top1_m.avg, 'top5': top5_m.avg}
+    results = {'test_loss': loss_m.avg, 'top1': top1_m.avg, 'top5': top5_m.avg}
+    
+    # Add Matryoshka dimension results
+    if is_matryoshka and all_accuracies:
+        for key, meter in all_accuracies.items():
+            results[key] = meter.avg
+    
+    return results
 
 
 if __name__ == '__main__':

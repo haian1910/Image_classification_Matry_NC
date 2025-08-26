@@ -1,0 +1,55 @@
+# Matryoshka ResNet50 configuration for ImageNet
+dataset: imagenet
+num_classes: 1000
+
+# Model settings
+model: matryoshka_resnet50
+matryoshka_dims: [128, 256, 512, 1024, 2048]
+matryoshka_adaptive: true
+matryoshka_warmup: 15
+matryoshka_loss_weights: null  # Use default exponential weights
+
+# Training settings
+epochs: 90
+batch_size: 64
+lr: 0.1
+weight_decay: 0.0001
+momentum: 0.9
+
+# Optimizer and scheduler
+opt: sgd
+sched: step
+decay_epochs: 30
+decay_rate: 0.1
+warmup_epochs: 5
+smoothing: 0.1
+
+# Regularization
+drop: 0.1
+drop_path_rate: 0.1
+mixup: 0.2
+cutmix: 1.0
+
+# Data augmentation
+aa: rand-m9-mstd0.5-inc1
+reprob: 0.25
+remode: pixel
+color_jitter: 0.4
+
+# Input settings
+input_shape: [3, 224, 224]
+image_mean: [0.485, 0.456, 0.406]
+image_std: [0.229, 0.224, 0.225]
+interpolation: bilinear
+
+# Training configuration
+workers: 8
+log_interval: 100
+seed: 42
+
+# Model EMA
+model_ema: true
+model_ema_decay: 0.9999
+
+# AMP
+amp: true
