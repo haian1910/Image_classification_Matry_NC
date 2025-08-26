@@ -1,0 +1,56 @@
+# Matryoshka ResNet50 configuration for CIFAR-10
+dataset: cifar10
+num_classes: 10
+
+# Model settings
+model: matryoshka_resnet50
+matryoshka_dims: [64, 128, 256, 512]
+matryoshka_adaptive: true
+matryoshka_warmup: 10
+matryoshka_loss_weights: null  # Use default exponential weights
+
+# Training settings
+epochs: 200
+batch_size: 128
+lr: 0.1
+weight_decay: 0.0001
+momentum: 0.9
+
+# Optimizer and scheduler
+opt: sgd
+sched: step
+decay_epochs: 60
+decay_rate: 0.1
+warmup_epochs: 5
+smoothing: 0.1
+
+# Regularization
+drop: 0.1
+drop_path_rate: 0.0
+mixup: 0.2
+cutmix: 1.0
+
+# Data augmentation
+aa: null
+reprob: 0.0
+remode: const
+color_jitter: 0.4
+cutout_length: 16
+
+# Input settings
+input_shape: [3, 32, 32]
+image_mean: [0.4914, 0.4822, 0.4465]
+image_std: [0.2023, 0.1994, 0.2010]
+interpolation: bilinear
+
+# Training configuration
+workers: 4
+log_interval: 50
+seed: 42
+
+# Model EMA
+model_ema: false
+model_ema_decay: 0.9998
+
+# AMP
+amp: false

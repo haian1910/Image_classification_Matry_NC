@@ -58,6 +58,25 @@ def build_model(args, model_name, pretrained=False, pretrained_ckpt=''):
         import timm
         model = timm.create_model(model_name[5:], pretrained=pretrained, drop_path_rate=args.drop_path_rate)
 
+    elif model_name.startswith('matryoshka_'):
+        # Matryoshka models
+        from .matryoshka import create_matryoshka_resnet
+        
+        # Parse model name: matryoshka_resnet50, matryoshka_resnet18, etc.
+        backbone_name = model_name.replace('matryoshka_', '')
+        
+        # Get Matryoshka dimensions from config or use defaults
+        matryoshka_dims = getattr(args, 'matryoshka_dims', [64, 128, 256, 512])
+        dropout = getattr(args, 'drop', 0.1)
+        
+        model = create_matryoshka_resnet(
+            model_name=backbone_name,
+            matryoshka_dims=matryoshka_dims,
+            num_classes=args.num_classes,
+            pretrained=pretrained,
+            dropout=dropout
+        )
+
     elif model_name.startswith('cifar_'):
         from .cifar import model_dict
         model_name = model_name[6:]

@@ -1,1 +1,2 @@
 from .cross_entropy import CrossEntropyLabelSmooth, SoftTargetCrossEntropy
+from .matryoshka_loss import MatryoshkaLoss
