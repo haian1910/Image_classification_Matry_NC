@@ -1,0 +1,54 @@
+dataset: imagenet
+data_root: ./data/imagenet
+
+model:
+  name: matryoshka_resnet18
+  pretrained: False
+  num_classes: 1000
+  # Matryoshka specific parameters
+  feature_dims: [128, 256, 384, 512]
+  adaptive: True
+
+# Training parameters
+epochs: 100
+batch_size: 256
+optimizer:
+  name: SGD
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 1e-4
+
+scheduler:
+  name: MultiStepLR
+  milestones: [30, 60, 90]
+  gamma: 0.1
+
+# Data augmentation
+mixup_alpha: 0.0  # Disable mixup for distillation
+cutmix_alpha: 0.0
+
+# Knowledge Distillation settings
+distill:
+  enable: true
+  teacher_model: resnet101
+  teacher_pretrained: true
+  kd_method: nc1
+  ori_loss_weight: 1.0
+  kd_loss_weight: 2.0
+  kd_loss_kwargs:
+    num_classes: 1000
+    temperature: 4.0
+    alpha: 0.6  # Balance between KL and alignment
+
+# Matryoshka specific training
+matryoshka:
+  progressive_training: true
+  warmup_epochs: 20
+  final_epochs: 10
+  dimension_weights: [0.4, 0.6, 0.8, 1.0]  # Progressive importance
+
+# Logging and checkpointing
+print_freq: 100
+save_freq: 10
+checkpoint_path: ./checkpoints/matryoshka_resnet18_nc1_imagenet
+log_wandb: true
