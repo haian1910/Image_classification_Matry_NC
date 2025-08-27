@@ -73,8 +73,8 @@ parser.add_argument('--epochs', type=int, default=200,
                     help='number of epochs to train (default: 2)')
 parser.add_argument('--warmup-epochs', type=int, default=3, 
                     help='epochs to warmup LR, if scheduler supports')
-parser.add_argument('--decay-rate', '--dr', type=float, 
-                    help='LR decay rate')
+parser.add_argument('--decay-rate', '--dr', type=float, default=0.1,
+                    help='LR decay rate (default: 0.1)')
 parser.add_argument('--decay_by_epoch', action='store_true', default=False,
                     help='decay LR by epoch, valid only for cosine scheduler')
 
@@ -212,7 +212,7 @@ def parse_args():
     args = parser.parse_args(remaining)
     for k, v in default_dicts.items():
         v.update(args.__dict__[k])
-    args.__dict__[k] = v
+        args.__dict__[k] = v
 
     # Cache the args as a text string to save them in the output dir later
     args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
