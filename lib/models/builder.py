@@ -35,7 +35,7 @@ def build_model(args, model_name, pretrained=False, pretrained_ckpt=''):
         edgenn_model.fold_dynamic_nn(channel_settings['choices'], channel_settings['bins'], channel_settings['min_bins'])
         logger.info(model)
 
-    elif model_name.lower().startswith('resnet'):
+    elif model_name.lower().startswith('resnet') or model_name.lower().startswith('resnext') :
         # resnet variants (the same as torchvision)
         model = getattr(resnet, model_name.lower())(num_classes=args.num_classes)
 
@@ -60,25 +60,45 @@ def build_model(args, model_name, pretrained=False, pretrained_ckpt=''):
 
     elif model_name.startswith('matryoshka_'):
         # Matryoshka models
-        from .matryoshka import create_matryoshka_resnet
+        from .matryoshka import create_matryoshka_resnet, create_matryoshka_cifar_resnet
         
-        # Parse model name: matryoshka_resnet50, matryoshka_resnet18, etc.
+        # Parse model name: matryoshka_resnet50, matryoshka_cifar_resnet20, etc.
         backbone_name = model_name.replace('matryoshka_', '')
         
         # Get Matryoshka dimensions from config or use defaults
         matryoshka_dims = getattr(args, 'matryoshka_dims', [64, 128, 256, 512])
         dropout = getattr(args, 'drop', 0.1)
         
-        model = create_matryoshka_resnet(
-            model_name=backbone_name,
-            matryoshka_dims=matryoshka_dims,
-            num_classes=args.num_classes,
-            pretrained=pretrained,
-            dropout=dropout
-        )
+        # Handle CIFAR models
+        if backbone_name.startswith('cifar_'):
+            # For CIFAR models, use smaller default dimensions
+            cifar_model_name = backbone_name.replace('cifar_', '')
+            if not hasattr(args, 'matryoshka_dims'):
+                matryoshka_dims = [16, 32, 48, 64]  # CIFAR-appropriate dimensions
+            
+            model = create_matryoshka_cifar_resnet(
+                model_name=cifar_model_name,
+                matryoshka_dims=matryoshka_dims,
+                num_classes=args.num_classes,
+                dropout=dropout
+            )
+        else:
+            # Regular ImageNet models
+            model = create_matryoshka_resnet(
+                model_name=backbone_name,
+                matryoshka_dims=matryoshka_dims,
+                num_classes=args.num_classes,
+                pretrained=pretrained,
+                dropout=dropout
+            )
 
     elif model_name.startswith('cifar_'):
         from .cifar import model_dict
+        print("="*100)
+
+        print(model_dict)
+        print("="*100)
+        print("model_dict")
         model_name = model_name[6:]
         model = model_dict[model_name](num_classes=args.num_classes)
     else:

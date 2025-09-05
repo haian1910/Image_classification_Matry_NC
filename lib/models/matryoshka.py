@@ -185,3 +185,60 @@ def create_matryoshka_resnet(model_name: str = 'resnet50',
     )
     
     return model
+
+
+class CIFARResNetBackbone(nn.Module):
+    """Custom backbone wrapper for CIFAR ResNet models."""
+    
+    def __init__(self, cifar_resnet):
+        super().__init__()
+        self.conv1 = cifar_resnet.conv1
+        self.bn1 = cifar_resnet.bn1
+        self.relu = cifar_resnet.relu
+        self.layer1 = cifar_resnet.layer1
+        self.layer2 = cifar_resnet.layer2
+        self.layer3 = cifar_resnet.layer3
+        self.avgpool = cifar_resnet.avgpool
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = self.relu(x)  # 32x32
+        
+        x, _ = self.layer1(x)  # 32x32, ignore preact
+        x, _ = self.layer2(x)  # 16x16, ignore preact  
+        x, _ = self.layer3(x)  # 8x8, ignore preact
+        
+        x = self.avgpool(x)
+        x = x.view(x.size(0), -1)
+        return x
+
+
+def create_matryoshka_cifar_resnet(model_name: str = 'resnet20',
+                                 matryoshka_dims: List[int] = [16, 32, 48, 64],
+                                 num_classes: int = 10,
+                                 dropout: float = 0.1):
+    """Create a Matryoshka CIFAR ResNet model."""
+    from .cifar import model_dict
+    
+    # Create CIFAR ResNet backbone
+    if model_name in model_dict:
+        cifar_resnet = model_dict[model_name](num_classes=num_classes)
+        # For CIFAR ResNets, the backbone dimension is 64 (final layer before FC)
+        backbone_dim = 64
+    else:
+        raise ValueError(f"Unsupported CIFAR model: {model_name}")
+    
+    # Create custom backbone that handles the tuple returns properly
+    backbone = CIFARResNetBackbone(cifar_resnet)
+    
+    # Create Matryoshka model
+    model = MatryoshkaModel(
+        backbone=backbone,
+        backbone_dim=backbone_dim,
+        matryoshka_dims=matryoshka_dims,
+        num_classes=num_classes,
+        dropout=dropout
+    )
+    
+    return model
