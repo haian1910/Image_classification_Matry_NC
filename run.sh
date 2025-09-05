@@ -19,5 +19,11 @@ export WORLD_SIZE='1'
 #     --decay-rate 0.1 \
 #     --experiment matryoshka_nc1_test_50ep
 
-
-python tools/train.py -c configs/strategies/resnet/resnet.yaml --model matryoshka_cifar_resnet20 --experiment new_20 --matryoshka-dims 8 16 32 64
+# NC1 Knowledge Distillation with CIFAR ResNet110 teacher
+python tools/train.py -c configs/strategies/resnet/resnet.yaml \
+    --model matryoshka_cifar_resnet20 \
+    --experiment new_20_nc1_distill \
+    --matryoshka-dims 16 32 48 64 \
+    --kd nc1 \
+    --teacher-model cifar_resnet110 \
+    --teacher-ckpt experiments/new/checkpoint-323.pth.tar

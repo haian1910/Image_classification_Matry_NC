@@ -109,6 +109,10 @@ class MatryoshkaModel(nn.Module):
                  dropout: float = 0.0):
         super().__init__()
         self.backbone = backbone
+        
+        # Add an identity layer for hooking final features
+        self.avgpool_flatten = nn.Identity()
+        
         self.matryoshka_head = MatryoshkaRepresentation(
             backbone_dim, matryoshka_dims, num_classes, dropout
         )
@@ -119,6 +123,9 @@ class MatryoshkaModel(nn.Module):
         features = self.backbone(x)
         if features.dim() > 2:
             features = F.adaptive_avg_pool2d(features, 1).flatten(1)
+        
+        # Pass through identity layer for hooking
+        features = self.avgpool_flatten(features)
         
         # Get nested representations
         return self.matryoshka_head(features, dims)

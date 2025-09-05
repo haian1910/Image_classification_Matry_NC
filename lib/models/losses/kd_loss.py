@@ -100,10 +100,11 @@ class NC1Loss(nn.Module):
 KD_MODULES = {
     'cifar_wrn_40_1': dict(modules=['relu', 'fc'], channels=[64, 100]),
     'cifar_wrn_40_2': dict(modules=['relu', 'fc'], channels=[128, 100]),
-    'cifar_resnet56': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # Fixed: layer3 = 64*8*8=4096, fc=10 for CIFAR-10
-    'cifar_resnet20': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # Fixed: layer3 = 64*8*8=4096, fc=10 for CIFAR-10
-    'cifar_resnet110': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # CIFAR ResNet110, good teacher for NC1
-    'cifar_resnet101': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # CIFAR ResNet101, same dimensions as other CIFAR models
+    'cifar_resnet56': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # Fixed for CIFAR-100: layer3 = 64*8*8=4096, fc=100 for CIFAR-100
+    'cifar_resnet20': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # Fixed for CIFAR-100: layer3 = 64*8*8=4096, fc=100 for CIFAR-100
+    'cifar_resnet110': dict(modules=['avgpool', 'fc'], channels=[64, 100]),  # avgpool gives the final features before classification (64 features after pooling)
+    'cifar_resnet101': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # CIFAR ResNet101, same dimensions as other CIFAR models, CIFAR-100
+    'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten', 'module.matryoshka_head'], channels=[64, 100]),  # Hook the final features before matryoshka head
     'tv_resnet50': dict(modules=['layer4', 'fc'], channels=[2048, 1000]),
     'tv_resnet34': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
     'tv_resnet18': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
