@@ -104,7 +104,9 @@ KD_MODULES = {
     'cifar_resnet20': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # Fixed for CIFAR-100: layer3 = 64*8*8=4096, fc=100 for CIFAR-100
     'cifar_resnet110': dict(modules=['avgpool', 'fc'], channels=[64, 100]),  # avgpool gives the final features before classification (64 features after pooling)
     'cifar_resnet101': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # CIFAR ResNet101, same dimensions as other CIFAR models, CIFAR-100
-    'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten', 'module.matryoshka_head'], channels=[64, 100]),  # Hook the final features before matryoshka head
+    # 'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten', 'module.matryoshka_head'], channels=[64, 100]),  # Hook the final features before matryoshka head
+    'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten'], channels=[64]),  # Hook the final features before matryoshka head
+
     'tv_resnet50': dict(modules=['layer4', 'fc'], channels=[2048, 1000]),
     'tv_resnet34': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
     'tv_resnet18': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
