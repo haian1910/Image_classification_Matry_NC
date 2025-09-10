@@ -1,26 +1,168 @@
+# # # aa: null
+# # # batch_size: 1024
+# # # color_jitter: 0.0
+# # # decay_by_epoch: True
+# # # decay_epochs: 30
+# # # decay_rate: 0.1
+# # # drop: 0.0
+# # # epochs: 320
+# # # log_interval: 50
+# # # lr: 1
+# # # min_lr: 1.0e-05
+# # # model_ema: false
+# # # model_ema_decay: 0.9998
+# # # momentum: 0.9
+# # # smoothing: 0.0
+# # # opt: sgd
+# # # opt_betas: null
+# # # opt_eps: 1.0e-08
+# # # remode: const
+# # # reprob: 0.0
+# # # sched: step
+# # # seed: 42
+# # # warmup_epochs: 0
+# # # warmup_lr: 0.2
+# # # weight_decay: 1.0e-4
+# # # workers: 4
+
+# # # dataset: cifar100
+# # # num_classes: 100
+
+# # # Matryoshka ResNet50 configuration for CIFAR-10
+# # dataset: cifar100
+# # num_classes: 100
+
+# # # Model settings
+
+
+# # # Training settings
+# # epochs: 500
+# # batch_size: 1024
+# # lr: 1
+# # weight_decay: 0.0001
+# # momentum: 0.9
+
+# # # Optimizer and scheduler
+# # opt: sgd
+# # sched: step
+# # decay_epochs: 100
+# # decay_rate: 0.15
+# # warmup_epochs: 20
+# # smoothing: 0.1
+
+# # # Regularization
+# # drop: 0.25
+# # drop_path_rate: 0.0
+# # mixup: 0.2
+# # cutmix: 1.0
+
+# # # Data augmentation
+# # aa: null
+# # reprob: 0.0
+# # remode: const
+# # color_jitter: 0.4
+# # cutout_length: 16
+
+# # # Input settings
+# # input_shape: [3, 32, 32]
+# # image_mean: [0.4914, 0.4822, 0.4465]
+# # image_std: [0.2023, 0.1994, 0.2010]
+# # interpolation: bilinear
+
+# # # Training configuration
+# # workers: 4
+# # log_interval: 50
+# # seed: 42
+
+# # # Model EMA
+# # model_ema: false
+# # model_ema_decay: 0.9998
+
+# # # AMP
+# # amp: false
+
+# # Matryoshka ResNet50 configuration for CIFAR-10
+# dataset: cifar100
+# num_classes: 100
+
+# # Training settings
+# epochs: 500
+# batch_size: 1024
+# lr: 0.1
+# weight_decay: 0.0001
+# momentum: 0.9
+
+# # Optimizer and scheduler
+# opt: sgd
+# sched: step
+# decay_epochs: 100
+# decay_rate: 0.1
+# warmup_epochs: 5
+# smoothing: 0.1
+
+# # Regularization
+# drop: 0.25
+# drop_path_rate: 0.0
+# mixup: 0.2
+# cutmix: 1.0
+
+# # Data augmentation
+# aa: null
+# reprob: 0.0
+# remode: const
+# color_jitter: 0.4
+# cutout_length: 16
+
+# # Input settings
+# input_shape: [3, 32, 32]
+# image_mean: [0.4914, 0.4822, 0.4465]
+# image_std: [0.2023, 0.1994, 0.2010]
+# interpolation: bilinear
+
+# # Training configuration
+# workers: 4
+# log_interval: 50
+# seed: 42
+
+# # Model EMA
+# model_ema: false
+# model_ema_decay: 0.9998
+
+# # AMP
+# amp: false
+dataset: cifar100
+num_classes: 100
 aa: null
-batch_size: 32
+batch_size: 2048
 color_jitter: 0.0
-decay_by_epoch: True
-decay_epochs: 30
-decay_rate: 0.1
+cutout_length: 16
+decay_by_epoch: false
+decay_epochs: 3
+decay_rate: 0.5
 drop: 0.0
-epochs: 120
+epochs: 1000
 log_interval: 50
-lr: 0.1
-min_lr: 1.0e-05
+lr: 0.99
+smoothing: 0.0
+min_lr: 1.0e-06
 model_ema: false
 model_ema_decay: 0.9998
 momentum: 0.9
-smoothing: 0.0
 opt: sgd
 opt_betas: null
 opt_eps: 1.0e-08
 remode: const
 reprob: 0.0
-sched: step
-seed: 42
+sched: cosine
+seed: 2
 warmup_epochs: 0
 warmup_lr: 0.2
-weight_decay: 1.0e-4
+weight_decay: 1.0e-04
 workers: 4
+sgd_no_nesterov: True
+opt_no_filter: True
+# dyrep
+dyrep: False
+dyrep_adjust_interval: 15
+dyrep_recal_bn_every_epoch: False
+dyrep_max_adjust_epochs: 500

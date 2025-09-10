@@ -100,10 +100,13 @@ class NC1Loss(nn.Module):
 KD_MODULES = {
     'cifar_wrn_40_1': dict(modules=['relu', 'fc'], channels=[64, 100]),
     'cifar_wrn_40_2': dict(modules=['relu', 'fc'], channels=[128, 100]),
-    'cifar_resnet56': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # Fixed: layer3 = 64*8*8=4096, fc=10 for CIFAR-10
-    'cifar_resnet20': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # Fixed: layer3 = 64*8*8=4096, fc=10 for CIFAR-10
-    'cifar_resnet110': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # CIFAR ResNet110, good teacher for NC1
-    'cifar_resnet101': dict(modules=['layer3', 'fc'], channels=[4096, 10]),  # CIFAR ResNet101, same dimensions as other CIFAR models
+    'cifar_resnet56': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # Fixed for CIFAR-100: layer3 = 64*8*8=4096, fc=100 for CIFAR-100
+    'cifar_resnet20': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # Fixed for CIFAR-100: layer3 = 64*8*8=4096, fc=100 for CIFAR-100
+    'cifar_resnet110': dict(modules=['avgpool', 'fc'], channels=[64, 100]),  # avgpool gives the final features before classification (64 features after pooling)
+    'cifar_resnet101': dict(modules=['layer3', 'fc'], channels=[4096, 100]),  # CIFAR ResNet101, same dimensions as other CIFAR models, CIFAR-100
+    # 'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten', 'module.matryoshka_head'], channels=[64, 100]),  # Hook the final features before matryoshka head
+    'matryoshka_cifar_resnet20': dict(modules=['module.avgpool_flatten'], channels=[64]),  # Hook the final features before matryoshka head
+
     'tv_resnet50': dict(modules=['layer4', 'fc'], channels=[2048, 1000]),
     'tv_resnet34': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
     'tv_resnet18': dict(modules=['layer4', 'fc'], channels=[512, 1000]),
@@ -225,6 +228,106 @@ class KDLoss():
             
             # Store student dimensions for later use
             self.matryoshka_dims = student_dims
+        elif kd_method == 'nc':
+            # Combined NC1 + NC2 distillation - Uses both orthogonal projection (NC1) and Gram matrix alignment (NC2)
+            
+            # Teacher: single feature extraction point
+            teacher_modules = KD_MODULES[teacher_name]['modules'][:1]  # feature only
+            teacher_channels = KD_MODULES[teacher_name]['channels'][:1]
+            
+            # Student: we need to get features for all Matryoshka dimensions
+            student_modules = KD_MODULES[student_name]['modules'][:1]  # backbone features only
+            
+            # Get Matryoshka dimensions from the student model
+            student_dims = getattr(self.student.module, 'matryoshka_dims', [8, 16, 32, 64])
+            if hasattr(self.student, 'module') and hasattr(self.student.module, 'matryoshka_head'):
+                # Get actual dimensions from the model
+                student_dims = list(self.student.module.matryoshka_head.classifiers.keys())
+                student_dims = [int(dim) for dim in student_dims]
+            
+            # Create NC1 loss with orthogonal projections (student_dims -> teacher_dim)
+            self.nc1_loss = NC1Loss(
+                teacher_dim=teacher_channels[0],
+                student_dims=student_dims
+            )
+            self.nc1_loss.cuda()
+            
+            # Create orthogonal projections for NC2 (reusing OrthogonalProjection from NC1)
+            self.orthogonal_projectors = nn.ModuleDict()
+            for dim in student_dims:
+                self.orthogonal_projectors[f'proj_{dim}'] = OrthogonalProjection(
+                    in_dim=dim, 
+                    out_dim=teacher_channels[0]  # Project to teacher dimension
+                )
+            self.orthogonal_projectors.cuda()
+            
+            # Initialize NC2-specific components
+            self.nc2_epsilon = 1e-8
+            self.ema_momentum = 0.9
+            self.nc2_alpha = 0.5  # Balance between batch and EMA losses
+            
+            # Initialize EMA class means for each dimension (will be created dynamically)
+            self.ema_class_means = nn.ParameterDict()
+            
+            # Teacher targets (to be set from args)
+            self.teacher_class_means = None
+            self.teacher_gram = None
+            self.teacher_targets_set = False
+            
+            # Weights for combining NC1 and NC2 losses
+            self.nc1_weight = 1.0
+            self.nc2_weight = 1.0
+            
+            # Add modules to student for optimization
+            self.student._nc1_loss = self.nc1_loss
+            self.student._orthogonal_projectors = self.orthogonal_projectors
+            
+            # Store student dimensions for later use
+            self.matryoshka_dims = student_dims
+        elif kd_method == 'nc2':
+            # NC2 distillation - Use orthogonal projections for projection but NC2 Gram matrix loss
+            
+            # Teacher: single feature extraction point
+            teacher_modules = KD_MODULES[teacher_name]['modules'][:1]  # feature only
+            teacher_channels = KD_MODULES[teacher_name]['channels'][:1]
+            
+            # Student: we need to get features for all Matryoshka dimensions
+            student_modules = KD_MODULES[student_name]['modules'][:1]  # backbone features only
+            
+            # Get Matryoshka dimensions from the student model
+            student_dims = getattr(self.student.module, 'matryoshka_dims', [8, 16, 32, 64])
+            if hasattr(self.student, 'module') and hasattr(self.student.module, 'matryoshka_head'):
+                # Get actual dimensions from the model
+                student_dims = list(self.student.module.matryoshka_head.classifiers.keys())
+                student_dims = [int(dim) for dim in student_dims]
+            
+            # Create orthogonal projections for each Matryoshka dimension (using kd_loss OrthogonalProjection)
+            self.orthogonal_projectors = nn.ModuleDict()
+            for dim in student_dims:
+                self.orthogonal_projectors[f'proj_{dim}'] = OrthogonalProjection(
+                    in_dim=dim, 
+                    out_dim=teacher_channels[0]  # Project to teacher dimension
+                )
+            self.orthogonal_projectors.cuda()
+            
+            # Initialize NC2-specific components
+            self.nc2_epsilon = 1e-8
+            self.ema_momentum = 0.9
+            self.nc2_alpha = 0.5  # Balance between batch and EMA losses
+            
+            # Initialize EMA class means for each dimension (will be created dynamically)
+            self.ema_class_means = nn.ParameterDict()
+            
+            # Teacher targets (to be set from args)
+            self.teacher_class_means = None
+            self.teacher_gram = None
+            self.teacher_targets_set = False
+            
+            # Add projectors to student for optimization
+            self.student._orthogonal_projectors = self.orthogonal_projectors
+            
+            # Store student dimensions for later use
+            self.matryoshka_dims = student_dims
         else:
             raise RuntimeError(f'KD method {kd_method} not found.')
 
@@ -241,6 +344,91 @@ class KDLoss():
 
         teacher.eval()
         self._iter = 0
+
+    def set_teacher_targets(self, teacher_class_means, teacher_gram):
+        """Set pre-computed teacher targets for NC2"""
+        # Store as regular attributes since KDLoss is not an nn.Module
+        self.teacher_class_means = teacher_class_means.detach().clone()
+        self.teacher_gram = teacher_gram.detach().clone()
+        self.teacher_targets_set = True
+    
+    def update_ema_class_means(self, batch_means, labels, dim):
+        """Update EMA class means for NC2"""
+        device = batch_means.device
+        num_classes = batch_means.shape[0]
+        
+        # Compute class counts in batch
+        class_counts = torch.bincount(labels, minlength=num_classes).float()
+        
+        # Get or initialize EMA buffer as regular attribute
+        ema_attr_name = f'ema_class_means_dim_{dim}'
+        if (hasattr(self, ema_attr_name) and 
+            getattr(self, ema_attr_name) is not None):
+            ema_means = getattr(self, ema_attr_name)
+        else:
+            # Initialize EMA means as regular attribute
+            setattr(self, ema_attr_name, batch_means.detach().clone())
+            return getattr(self, ema_attr_name)
+        
+        # Update EMA for classes present in batch
+        mask = (class_counts > 0)
+        with torch.no_grad():
+            ema_means[mask] = self.ema_momentum * ema_means[mask] + (1 - self.ema_momentum) * batch_means[mask].detach()
+        
+        return ema_means
+    
+    def compute_gram_matrix(self, class_means, normalize=True):
+        """Compute normalized Gram matrix from class means"""
+        gram = torch.mm(class_means, class_means.t())
+        if normalize:
+            gram = gram / (torch.norm(gram, p='fro') + self.nc2_epsilon)
+        return gram
+    
+    def compute_nc2_loss_for_dim(self, student_embeddings, labels, dim):
+        """Compute NC2 loss for a specific dimension"""
+        device = student_embeddings.device
+        num_classes = 100  # CIFAR-100
+        
+        # Project student embeddings using orthogonal projection
+        projector = self.orthogonal_projectors[f'proj_{dim}']
+        projected_embeddings = projector(student_embeddings)
+        
+        # Compute batch class means
+        batch_means = torch.zeros(num_classes, projected_embeddings.shape[1], 
+                                 device=device, dtype=projected_embeddings.dtype)
+        class_counts = torch.zeros(num_classes, device=device)
+        
+        for class_id in labels.unique():
+            class_mask = (labels == class_id)
+            if class_mask.sum() > 0:
+                batch_means[class_id] = projected_embeddings[class_mask].mean(dim=0)
+                class_counts[class_id] = class_mask.sum().float()
+        
+        # Batch NC2 loss (if we have teacher targets)
+        batch_nc2_loss = torch.tensor(0.0, device=device)
+        if self.teacher_targets_set and len(labels.unique()) > 1:
+            unique_classes = labels.unique()
+            student_gram_batch = self.compute_gram_matrix(batch_means[unique_classes])
+            teacher_gram_subset = self.teacher_gram[unique_classes][:, unique_classes]
+            teacher_gram_subset = teacher_gram_subset / (torch.norm(teacher_gram_subset, p='fro') + self.nc2_epsilon)
+            batch_nc2_loss = torch.norm(student_gram_batch - teacher_gram_subset, p='fro') ** 2
+        
+        # EMA NC2 loss
+        ema_means = self.update_ema_class_means(batch_means, labels, dim)
+        student_gram_ema = self.compute_gram_matrix(ema_means)
+        
+        ema_nc2_loss = torch.tensor(0.0, device=device)
+        if self.teacher_targets_set:
+            ema_nc2_loss = torch.norm(student_gram_ema - self.teacher_gram, p='fro') ** 2
+        
+        # Combined NC2 loss
+        nc2_loss = self.nc2_alpha * batch_nc2_loss + (1 - self.nc2_alpha) * ema_nc2_loss
+        
+        # Add orthogonal regularization
+        # ortho_loss = projector.orthogonal_regularization_loss()
+
+        
+        return nc2_loss
 
     def __call__(self, x, targets):
         with torch.no_grad():
@@ -312,6 +500,145 @@ class KDLoss():
                     
                     loss_str = " | ".join(dim_losses + [total_loss])
                     logger.info(f'[{tm}-{sm}] NC1 losses: {loss_str}')
+            
+            # Special handling for combined NC (NC1 + NC2) - both orthogonal projection and Gram matrix alignment
+            elif self.kd_method == 'nc':
+                teacher_feat = self._teacher_out[tm]
+                student_backbone_feat = self._student_out[sm]  # Raw backbone features
+                
+                # Handle tuples from forward hooks
+                if isinstance(teacher_feat, tuple):
+                    teacher_feat = teacher_feat[0] if len(teacher_feat) > 0 else teacher_feat
+                if isinstance(student_backbone_feat, tuple):
+                    student_backbone_feat = student_backbone_feat[0] if len(student_backbone_feat) > 0 else student_backbone_feat
+                
+                # Ensure we have tensors
+                if not isinstance(teacher_feat, torch.Tensor):
+                    raise TypeError(f"Expected tensor for teacher features, got {type(teacher_feat)}")
+                if not isinstance(student_backbone_feat, torch.Tensor):
+                    raise TypeError(f"Expected tensor for student features, got {type(student_backbone_feat)}")
+                
+                # Flatten spatial dimensions if needed
+                if teacher_feat.dim() > 2:
+                    teacher_feat = torch.flatten(teacher_feat, 1)
+                if student_backbone_feat.dim() > 2:
+                    student_backbone_feat = torch.flatten(student_backbone_feat, 1)
+                
+                # Prepare features for NC1 loss
+                student_features_dict = {}
+                for dim in self.matryoshka_dims:
+                    # Take the first 'dim' features from the backbone
+                    if student_backbone_feat.size(1) >= dim:
+                        student_features_dict[str(dim)] = student_backbone_feat[:, :dim]
+                    else:
+                        # If backbone features are smaller than requested dim, pad with zeros
+                        padded_feat = torch.zeros(student_backbone_feat.size(0), dim, 
+                                                device=student_backbone_feat.device, 
+                                                dtype=student_backbone_feat.dtype)
+                        padded_feat[:, :student_backbone_feat.size(1)] = student_backbone_feat
+                        student_features_dict[str(dim)] = padded_feat
+                
+                # Compute NC1 loss: orthogonal projection + MSE
+                nc1_losses = self.nc1_loss(teacher_feat, student_features_dict)
+                nc1_total_loss = nc1_losses['nc1_loss_total']
+                
+                # Compute NC2 loss: Gram matrix alignment for each Matryoshka dimension
+                total_nc2_loss = 0.0
+                nc2_individual_losses = {}
+                
+                for dim in self.matryoshka_dims:
+                    # Get the features for this dimension
+                    student_feat_dim = student_features_dict[str(dim)]
+                    
+                    # Compute NC2 loss for this dimension
+                    nc2_loss_dim = self.compute_nc2_loss_for_dim(
+                        student_feat_dim, targets, dim
+                    )
+                    
+                    nc2_individual_losses[f'nc2_dim_{dim}'] = nc2_loss_dim.item()
+                    total_nc2_loss += nc2_loss_dim
+                
+                # Combine NC1 and NC2 losses
+                kd_loss_ = self.nc1_weight * nc1_total_loss + self.nc2_weight * total_nc2_loss
+                
+                # Log individual dimension losses for monitoring
+                if self._iter % 50 == 0:
+                    # Log NC1 losses per dimension
+                    nc1_dim_losses = [f"nc1_{k.split('_')[-1]}: {v.item():.4f}" for k, v in nc1_losses.items() if k.startswith('nc1_loss_') and not k.endswith('_total')]
+                    nc1_total_str = f"nc1_total: {nc1_total_loss.item():.4f}"
+                    
+                    # Log NC2 losses per dimension
+                    nc2_dim_losses = [f"nc2_{dim}: {nc2_individual_losses[f'nc2_dim_{dim}']:.4f}" for dim in self.matryoshka_dims]
+                    nc2_total_str = f"nc2_total: {total_nc2_loss.item():.4f}"
+                    
+                    # Combined total
+                    combined_total_str = f"combined_total: {kd_loss_.item():.4f}"
+                    
+                    all_losses = nc1_dim_losses + [nc1_total_str] + nc2_dim_losses + [nc2_total_str] + [combined_total_str]
+                    loss_str = " | ".join(all_losses)
+                    logger.info(f'[{tm}-{sm}] Combined NC losses: {loss_str}')
+            
+            # Special handling for NC2 - Neural Collapse inspired distillation with Gram matrix alignment
+            elif self.kd_method == 'nc2':
+                teacher_feat = self._teacher_out[tm]
+                student_backbone_feat = self._student_out[sm]  # Raw backbone features
+                
+                # Handle tuples from forward hooks
+                if isinstance(teacher_feat, tuple):
+                    teacher_feat = teacher_feat[0] if len(teacher_feat) > 0 else teacher_feat
+                if isinstance(student_backbone_feat, tuple):
+                    student_backbone_feat = student_backbone_feat[0] if len(student_backbone_feat) > 0 else student_backbone_feat
+                
+                # Ensure we have tensors
+                if not isinstance(teacher_feat, torch.Tensor):
+                    raise TypeError(f"Expected tensor for teacher features, got {type(teacher_feat)}")
+                if not isinstance(student_backbone_feat, torch.Tensor):
+                    raise TypeError(f"Expected tensor for student features, got {type(student_backbone_feat)}")
+                
+                # Flatten spatial dimensions if needed
+                if teacher_feat.dim() > 2:
+                    teacher_feat = torch.flatten(teacher_feat, 1)
+                if student_backbone_feat.dim() > 2:
+                    student_backbone_feat = torch.flatten(student_backbone_feat, 1)
+                
+                # Compute NC2 loss: Gram matrix alignment for each Matryoshka dimension
+                total_nc2_loss = 0.0
+                total_ortho_loss = 0.0
+                individual_losses = {}
+                
+                for dim in self.matryoshka_dims:
+                    # Take the first 'dim' features from the backbone
+                    if student_backbone_feat.size(1) >= dim:
+                        student_feat_dim = student_backbone_feat[:, :dim]
+                    else:
+                        # If backbone features are smaller than requested dim, pad with zeros
+                        padded_feat = torch.zeros(student_backbone_feat.size(0), dim, 
+                                                device=student_backbone_feat.device, 
+                                                dtype=student_backbone_feat.dtype)
+                        padded_feat[:, :student_backbone_feat.size(1)] = student_backbone_feat
+                        student_feat_dim = padded_feat
+                    
+                    # Compute NC2 loss for this dimension
+                    nc2_loss_dim = self.compute_nc2_loss_for_dim(
+                        student_feat_dim, targets, dim
+                    )
+                    
+                    individual_losses[f'nc2_dim_{dim}'] = nc2_loss_dim.item()
+                    
+                    total_nc2_loss += nc2_loss_dim
+                
+                # Total loss includes both NC2 and orthogonal regularization
+                kd_loss_ = total_nc2_loss # Scale ortho loss
+                
+                # Log individual dimension losses for monitoring
+                if self._iter % 50 == 0:
+                    # Log NC2 losses per dimension
+                    nc2_dim_losses = [f"nc2_{dim}: {individual_losses[f'nc2_dim_{dim}']:.4f}" for dim in self.matryoshka_dims]
+                    total_loss = f"total: {kd_loss_.item():.4f}"
+                    
+                    all_losses = nc2_dim_losses  + [total_loss]
+                    loss_str = " | ".join(all_losses)
+                    logger.info(f'[{tm}-{sm}] NC2 losses: {loss_str}')
             
             # Special handling for other methods that need flattening
             elif self.kd_method in ['mse']:

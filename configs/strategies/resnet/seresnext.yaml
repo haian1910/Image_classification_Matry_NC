@@ -22,3 +22,5 @@ warmup_epochs: 5
 warmup_lr: 1.0e-06
 weight_decay: 1.0e-04
 workers: 4
+dataset: cifar100
+num_classes: 100

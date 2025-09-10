@@ -1,0 +1,58 @@
+dataset: cifar10
+data_root: ./data
+
+model:
+  name: matryoshka_resnet18
+  pretrained: False
+  num_classes: 10
+  # Matryoshka specific parameters
+  feature_dims: [128, 256, 384, 512]
+  adaptive: True
+
+# Training parameters
+epochs: 200
+batch_size: 128
+optimizer:
+  name: SGD
+  lr: 0.1
+  momentum: 0.9
+  weight_decay: 5e-4
+
+scheduler:
+  name: MultiStepLR
+  milestones: [60, 120, 160]
+  gamma: 0.2
+
+# Data augmentation
+mixup_alpha: 0.0  # Disable mixup for distillation
+cutmix_alpha: 0.0
+
+# Knowledge Distillation settings
+distill:
+  enable: true
+  teacher_model: resnet101
+  teacher_pretrained: true
+  kd_method: nc2
+  ori_loss_weight: 1.0
+  kd_loss_weight: 3.0
+  kd_loss_kwargs:
+    num_classes: 10
+    nc2_lambda: 1.0      # Weight for NC2 Gram matrix loss
+    ortho_lambda: 1.0    # Weight for orthogonality regularization
+    ema_momentum: 0.95   # EMA momentum for class means (beta in paper)
+    nc2_alpha: 0.5       # Interpolation between batch and EMA losses
+
+# NC2 specific settings
+nc2_teacher_targets: "teacher_targets_matryoshka_resnet18_nc2_cifar10.pth"  # Path to pre-computed teacher targets
+
+# Matryoshka specific training
+matryoshka:
+  progressive_training: true
+  warmup_epochs: 10
+  final_epochs: 20
+  dimension_weights: [0.5, 0.7, 0.9, 1.0]  # Progressive importance
+
+# Logging and checkpointing
+log_freq: 50
+save_freq: 10
+resume: ""

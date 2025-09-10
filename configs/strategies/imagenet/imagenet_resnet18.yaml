@@ -1,0 +1,52 @@
+# ImageNet ResNet18 configuration
+dataset: imagenet
+num_classes: 10  # For sample dataset with 10 classes (change to 1000 for full ImageNet)
+
+# Model settings
+# Use regular ResNet18 for ImageNet
+
+# Training settings
+epochs: 90
+batch_size: 256
+lr: 0.1
+weight_decay: 0.0001
+momentum: 0.9
+
+# Optimizer and scheduler
+opt: sgd
+sched: step
+decay_epochs: 30
+decay_rate: 0.1
+warmup_epochs: 0
+warmup_lr: 0.1
+smoothing: 0.1
+
+# Regularization
+drop: 0.0
+drop_path_rate: 0.0
+mixup: 0.0
+cutmix: 0.0
+
+# Data augmentation
+aa: rand-m9-mstd0.5-inc1  # AutoAugment
+reprob: 0.25  # Random erasing probability
+remode: pixel
+color_jitter: 0.4
+
+# Input settings
+input_shape: [3, 224, 224]
+image_mean: [0.485, 0.456, 0.406]  # ImageNet mean
+image_std: [0.229, 0.224, 0.225]   # ImageNet std
+interpolation: bilinear
+
+# Training configuration
+workers: 4
+log_interval: 50
+seed: 42
+
+# Model EMA
+model_ema: true
+model_ema_decay: 0.9999
+
+# AMP (Automatic Mixed Precision)
+amp: true

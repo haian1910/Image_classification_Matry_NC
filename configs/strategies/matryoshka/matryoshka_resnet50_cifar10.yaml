@@ -1,10 +1,10 @@
 # Matryoshka ResNet50 configuration for CIFAR-10
-dataset: cifar10
-num_classes: 10
+dataset: cifar100
+num_classes: 100
 
 # Model settings
 model: matryoshka_resnet50
-matryoshka_dims: [64, 128, 256, 512]
+matryoshka_dims: [8, 16, 32, 64, 128, 256, 512]
 matryoshka_adaptive: true
 matryoshka_warmup: 10
 matryoshka_loss_weights: null  # Use default exponential weights
