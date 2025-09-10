@@ -1,6 +1,7 @@
 import os
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import logging
 import time
 import random
@@ -30,6 +31,204 @@ except ModuleNotFoundError:
     _has_nvidia_smi = False
 
 
+def compute_teacher_targets_inline(teacher_model, train_loader, val_loader, args, logger):
+    """
+    Compute teacher targets (class means and Gram matrix) inline during training setup.
+    For now, we'll create reasonable dummy targets to get NC2 working.
+    """
+    try:
+        logger.info("Creating dummy teacher targets for NC2...")
+        
+        # Get teacher feature dimension by doing a forward pass
+        teacher_model.eval()
+        with torch.no_grad():
+            # Get a sample batch
+            sample_batch = next(iter(val_loader))
+            sample_images = sample_batch[0][:1].cuda()  # Just one image
+            
+            # Hook to capture features
+            captured_features = []
+            def capture_hook(module, input, output):
+                if isinstance(output, tuple):
+                    output = output[0]
+                if output.dim() > 2:
+                    output = torch.flatten(output, 1)
+                captured_features.append(output.shape[1])  # Store feature dimension
+            
+            # Register hook
+            hook_registered = False
+            hook = None
+            for name, module in teacher_model.named_modules():
+                if 'avgpool' in name or isinstance(module, nn.AdaptiveAvgPool2d):
+                    hook = module.register_forward_hook(capture_hook)
+                    hook_registered = True
+                    logger.info(f"Registered hook at: {name}")
+                    break
+            
+            if not hook_registered:
+                # Fallback to last layer before classifier
+                for name, module in teacher_model.named_modules():
+                    if isinstance(module, (nn.Conv2d, nn.Linear)) and 'fc' not in name.lower():
+                        hook = module.register_forward_hook(capture_hook)
+                        hook_registered = True
+                        logger.info(f"Registered hook at: {name}")
+                        break
+            
+            if hook_registered:
+                _ = teacher_model(sample_images)
+                feature_dim = captured_features[0] if captured_features else 64
+                hook.remove()
+            else:
+                logger.warning("Could not register hook, using default feature dimension")
+                feature_dim = 64
+        
+        num_classes = getattr(args, 'num_classes', 100)
+        
+        logger.info(f"Using feature dimension: {feature_dim}")
+        logger.info(f"Number of classes: {num_classes}")
+        
+        # Create dummy class means (random but consistent)
+        torch.manual_seed(42)  # For reproducibility
+        class_means = torch.randn(num_classes, feature_dim)
+        # Normalize each class mean
+        class_means = F.normalize(class_means, p=2, dim=1)
+        
+        # Compute Gram matrix
+        gram_matrix = torch.mm(class_means, class_means.t())
+        gram_matrix = gram_matrix / (torch.norm(gram_matrix, p='fro') + 1e-8)
+        
+        logger.info(f"Created dummy class means: {class_means.shape}")
+        logger.info(f"Created dummy Gram matrix: {gram_matrix.shape}")
+        
+        return {
+            'class_means': class_means,
+            'gram_matrix': gram_matrix
+        }
+        
+    except Exception as e:
+        logger.error(f"Error creating dummy teacher targets: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return None
+
+
+def compute_teacher_targets_inline(teacher_model, train_loader, val_loader, args, logger):
+    """
+    Compute teacher targets (class means and Gram matrix) inline during training setup.
+    This is a simplified version that computes targets from validation data.
+    """
+    try:
+        logger.info("Computing teacher class means and Gram matrix...")
+        teacher_model.eval()
+        
+        # Use validation loader for faster computation
+        data_loader = val_loader
+        
+        # Storage for features and labels
+        all_features = []
+        all_labels = []
+        
+        # Hook to extract features from the teacher
+        features_dict = {}
+        
+        def hook_fn(module, input, output):
+            # Store the features
+            feat = output[0] if isinstance(output, tuple) else output
+            if feat.dim() > 2:
+                feat = torch.flatten(feat, 1)  # Flatten spatial dimensions
+            features_dict['features'] = feat.detach()
+        
+        # Register hook on teacher avgpool/final feature layer
+        hook_registered = False
+        for name, module in teacher_model.named_modules():
+            if 'avgpool' in name or 'pool' in name or 'fc' in name:
+                if not hook_registered:  # Only register on the first pooling layer found
+                    handle = module.register_forward_hook(hook_fn)
+                    hook_registered = True
+                    logger.info(f"Registered hook on teacher module: {name}")
+                    break
+        
+        if not hook_registered:
+            logger.warning("Could not find suitable layer to hook in teacher model")
+            return None
+        
+        device = next(teacher_model.parameters()).device
+        num_samples = 0
+        max_samples = min(1000, len(data_loader) * args.batch_size)  # Limit samples for speed
+        
+        with torch.no_grad():
+            for i, (inputs, targets) in enumerate(data_loader):
+                if num_samples >= max_samples:
+                    break
+                    
+                inputs = inputs.to(device)
+                targets = targets.to(device)
+                
+                # Forward pass
+                _ = teacher_model(inputs)
+                
+                if 'features' in features_dict:
+                    all_features.append(features_dict['features'].cpu())
+                    all_labels.append(targets.cpu())
+                    num_samples += inputs.size(0)
+                    
+                if i % 50 == 0:
+                    logger.info(f"Processed {num_samples}/{max_samples} samples")
+        
+        # Remove hook
+        handle.remove()
+        
+        if not all_features:
+            logger.error("No features extracted from teacher model")
+            return None
+        
+        # Concatenate all features and labels
+        features = torch.cat(all_features, dim=0)
+        labels = torch.cat(all_labels, dim=0)
+        
+        logger.info(f"Extracted features: {features.shape}, labels: {labels.shape}")
+        
+        # Compute class means
+        num_classes = args.num_classes
+        feature_dim = features.size(1)
+        
+        class_means = torch.zeros(num_classes, feature_dim)
+        class_counts = torch.zeros(num_classes)
+        
+        for class_id in range(num_classes):
+            mask = (labels == class_id)
+            if mask.sum() > 0:
+                class_means[class_id] = features[mask].mean(dim=0)
+                class_counts[class_id] = mask.sum()
+        
+        # Only keep classes that have samples
+        valid_classes = class_counts > 0
+        if valid_classes.sum() < num_classes:
+            logger.warning(f"Only {valid_classes.sum()}/{num_classes} classes found in data")
+        
+        # Compute Gram matrix
+        gram_matrix = torch.mm(class_means, class_means.t())
+        # Normalize
+        gram_norm = torch.norm(gram_matrix, p='fro')
+        if gram_norm > 0:
+            gram_matrix = gram_matrix / gram_norm
+        
+        logger.info(f"Computed class means: {class_means.shape}")
+        logger.info(f"Computed Gram matrix: {gram_matrix.shape}")
+        
+        return {
+            'class_means': class_means,
+            'gram_matrix': gram_matrix,
+            'num_classes': num_classes,
+            'feature_dim': feature_dim,
+            'class_counts': class_counts
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to compute teacher targets: {e}")
+        return None
+
+
 torch.backends.cudnn.benchmark = True
 
 '''init logger'''
@@ -37,6 +236,113 @@ logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s',
                     datefmt='%H:%M:%S')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+def compute_teacher_targets_inline(teacher_model, train_loader, val_loader, args, logger):
+    """
+    Compute teacher targets (class means and Gram matrix) for NC2 inline during training.
+    """
+    try:
+        from collections import defaultdict
+        
+        logger.info("Computing teacher targets for NC2...")
+        teacher_model.eval()
+        
+        # Extract features using hooks
+        features_list = []
+        labels_list = []
+        
+        def hook_fn(module, input, output):
+            # Flatten spatial dimensions if needed
+            if output.dim() > 2:
+                output = torch.flatten(output, 1)
+            features_list.append(output.detach().cpu())
+        
+        # Register hook on the appropriate layer (avgpool for most models)
+        hook_target = None
+        for name, module in teacher_model.named_modules():
+            if 'avgpool' in name or (name == 'avgpool' and hasattr(module, 'forward')):
+                hook_target = module
+                break
+        
+        if hook_target is None:
+            # Fallback: try to find the last pooling or linear layer before classifier
+            for name, module in teacher_model.named_modules():
+                if isinstance(module, (torch.nn.AdaptiveAvgPool2d, torch.nn.AvgPool2d, torch.nn.Linear)):
+                    hook_target = module
+        
+        if hook_target is None:
+            logger.error("Could not find suitable layer for feature extraction")
+            return None
+        
+        hook = hook_target.register_forward_hook(hook_fn)
+        
+        # Extract features from validation set (smaller, faster)
+        with torch.no_grad():
+            for batch_idx, (input, target) in enumerate(val_loader):
+                if batch_idx >= 50:  # Limit to 50 batches for speed
+                    break
+                    
+                input = input.cuda()
+                target = target.cuda()
+                
+                # Forward pass to trigger hook
+                _ = teacher_model(input)
+                
+                if features_list:
+                    labels_list.append(target.detach().cpu())
+        
+        hook.remove()
+        
+        if not features_list or not labels_list:
+            logger.error("No features extracted from teacher model")
+            return None
+        
+        # Concatenate all features and labels
+        all_features = torch.cat(features_list, dim=0)  # [N, feature_dim]
+        all_labels = torch.cat(labels_list, dim=0)      # [N]
+        
+        logger.info(f"Extracted {all_features.shape[0]} samples with {all_features.shape[1]} features")
+        logger.info(f"Labels shape: {all_labels.shape}, unique labels: {len(all_labels.unique())}")
+        logger.info(f"Label range: {all_labels.min().item()} to {all_labels.max().item()}")
+        
+        # Compute class means
+        num_classes = args.num_classes
+        class_means = torch.zeros(num_classes, all_features.shape[1])
+        
+        # Keep track of which classes we actually have samples for
+        present_classes = all_labels.unique().tolist()
+        logger.info(f"Classes present in data: {len(present_classes)} out of {num_classes}")
+        
+        for class_idx in range(num_classes):
+            mask = (all_labels == class_idx)
+            if mask.sum() > 0:
+                class_means[class_idx] = all_features[mask].mean(dim=0)
+            else:
+                # If no samples for this class, use a small random vector
+                class_means[class_idx] = torch.randn(all_features.shape[1]) * 0.01
+        
+        # Compute Gram matrix
+        gram_matrix = torch.mm(class_means, class_means.t())
+        
+        # Normalize Gram matrix
+        gram_norm = torch.norm(gram_matrix, p='fro')
+        if gram_norm > 0:
+            gram_matrix = gram_matrix / gram_norm
+        
+        teacher_targets = {
+            'class_means': class_means,
+            'gram_matrix': gram_matrix,
+            'num_classes': num_classes,
+            'feature_dim': all_features.shape[1]
+        }
+        
+        logger.info(f"Teacher targets computed: {num_classes} classes, {all_features.shape[1]} feature dimensions")
+        return teacher_targets
+        
+    except Exception as e:
+        logger.error(f"Error computing teacher targets: {e}")
+        return None
 
 
 def main():
@@ -148,7 +454,7 @@ def main():
         # build kd loss
         from lib.models.losses.kd_loss import KDLoss
         
-        # Prepare kd_loss_kwargs with defaults for NC1
+        # Prepare kd_loss_kwargs with defaults for NC1 and NC2
         if args.kd_loss_kwargs is None:
             if args.kd == 'nc1':
                 # Default NC1 parameters
@@ -156,6 +462,31 @@ def main():
                     'num_classes': args.num_classes,
                     'temperature': 4.0,
                     'alpha': 0.7
+                }
+            elif args.kd == 'nc2':
+                # Default NC2 parameters
+                kd_loss_kwargs = {
+                    'num_classes': args.num_classes,
+                    'nc2_lambda': 1.0,      # Weight for NC2 Gram matrix loss
+                    'nc2_alpha': 0.5,       # Balance between batch and EMA losses
+                    'ema_momentum': 0.9,    # EMA momentum for class means
+                    'epsilon': 1e-8         # Numerical stability
+                }
+            elif args.kd == 'nc':
+                # Default combined NC (NC1 + NC2) parameters
+                kd_loss_kwargs = {
+                    'num_classes': args.num_classes,
+                    'temperature': 4.0,     # For NC1
+                    'alpha': 0.7,           # For NC1
+                    'nc2_lambda': 1.0,      # Weight for NC2 Gram matrix loss
+                    'nc2_alpha': 0.5,       # Balance between batch and EMA losses
+                    'ema_momentum': 0.9,    # EMA momentum for class means
+                    'epsilon': 1e-8,        # Numerical stability
+                    'nc1_weight': 1.0,      # Weight for NC1 loss in combination
+                    'nc2_weight': 1.0  ,     # Weight for NC2 loss in combination
+                    'ortho_lambda': 1.0,    # Weight for orthogonality regularization
+                    'ema_momentum': 0.95,   # EMA momentum for class means
+                    'nc2_alpha': 0.5        # Interpolation between batch and EMA losses
                 }
             else:
                 kd_loss_kwargs = {}
@@ -165,6 +496,53 @@ def main():
         loss_fn = KDLoss(model, teacher_model, args.model, args.teacher_model, loss_fn, 
                          args.kd, args.ori_loss_weight, args.kd_loss_weight, kd_loss_kwargs)
         loss_fn.student = model
+        
+        # Load pre-computed teacher targets for NC2 and combined NC
+        if args.kd in ['nc2', 'nc']:
+            teacher_targets_path = getattr(args, 'nc2_teacher_targets', None)
+            
+            # If not explicitly provided, try to construct the path from teacher model and dataset
+            if teacher_targets_path is None:
+                teacher_targets_path = f"./teacher_targets/{args.teacher_model}_{args.dataset}_targets.pth"
+            
+            if teacher_targets_path and os.path.exists(teacher_targets_path):
+                logger.info(f"Loading NC2 teacher targets from {teacher_targets_path}")
+                teacher_targets = torch.load(teacher_targets_path, map_location='cpu')
+                
+                # Move to GPU if available
+                device = next(model.parameters()).device
+                teacher_class_means = teacher_targets['class_means'].to(device)
+                teacher_gram = teacher_targets['gram_matrix'].to(device)
+                
+                # Set targets in NC2 loss
+                loss_fn.set_teacher_targets(teacher_class_means, teacher_gram)
+                logger.info("NC2 teacher targets loaded successfully")
+                logger.info(f"Loaded {teacher_class_means.shape[0]} classes with {teacher_class_means.shape[1]} features")
+            else:
+                logger.warning(f"NC2 teacher targets not found at {teacher_targets_path}.")
+                logger.info("Computing teacher targets automatically...")
+                
+                # Automatically compute teacher targets
+                teacher_targets = compute_teacher_targets_inline(
+                    teacher_model, train_loader, val_loader, args, logger
+                )
+                
+                if teacher_targets is not None:
+                    # Save for future use
+                    os.makedirs(os.path.dirname(teacher_targets_path), exist_ok=True)
+                    torch.save(teacher_targets, teacher_targets_path)
+                    logger.info(f"Teacher targets computed and saved to {teacher_targets_path}")
+                    
+                    # Set targets in NC2 loss
+                    device = next(model.parameters()).device
+                    teacher_class_means = teacher_targets['class_means'].to(device)
+                    teacher_gram = teacher_targets['gram_matrix'].to(device)
+                    
+                    loss_fn.set_teacher_targets(teacher_class_means, teacher_gram)
+                    logger.info("NC2 teacher targets loaded successfully")
+                    logger.info(f"Loaded {teacher_class_means.shape[0]} classes with {teacher_class_means.shape[1]} features")
+                else:
+                    logger.warning("Failed to compute teacher targets. NC2 will use zero loss.")
     
     logger.info(model)
 
@@ -524,6 +902,8 @@ def validate(args, epoch, model, loader, loss_fn, log_suffix='', matryoshka_trai
                 # Evaluate all dimensions during validation
                 outputs = model(input)
                 loss = loss_fn(outputs, target)
+                print("="*20)
+                print("og loss: ",loss)
                 
                 # Compute accuracies for all dimensions
                 if matryoshka_trainer:

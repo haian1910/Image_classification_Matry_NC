@@ -131,13 +131,14 @@
 # # AMP
 # amp: false
 dataset: cifar100
+num_classes: 100
 aa: null
-batch_size: 1024
+batch_size: 2048
 color_jitter: 0.0
 cutout_length: 16
 decay_by_epoch: false
 decay_epochs: 3
-decay_rate: 0.967
+decay_rate: 0.5
 drop: 0.0
 epochs: 1000
 log_interval: 50
